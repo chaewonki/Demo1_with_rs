@@ -3,11 +3,11 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHB
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QImage, QPixmap
 import pyrealsense2 as rs
+import cv2
 import numpy as np
 import serial
 import threading
 
-# Packet
 STX = b'\x02'
 READY = b'\x00\x00\x01'
 STA = b'STA'
@@ -19,11 +19,9 @@ APR = b'APR'
 COL_X = b'COX'
 COL_Y = b'COY'
 
-# PROJECTION
-
 IMAGE_SIZE = (640, 480)
 
-FONT_SIZE = 30  # You can adjust this value as needed
+FONT_SIZE = 30 
 
 class SerialComm(QWidget):
     kv_signal = pyqtSignal(int)
@@ -88,9 +86,8 @@ class SerialComm(QWidget):
     def string_to_byte(self, key_string):
         return bytes.fromhex(key_string.replace(" ",""))
 
-
 class RealSenseManager:
-    distance_to_table = 0.0
+    distance = 0.0
     def __init__(self):
         self.init_realsense()
         self.setup_filters()
@@ -103,22 +100,18 @@ class RealSenseManager:
         profile = self.pipeline.start(config)
         depth_sensor = profile.get_device().first_depth_sensor()
 
-        # Basic Controls
-        depth_sensor.set_option(rs.option.enable_auto_exposure, 1)  # Checked
+        depth_sensor.set_option(rs.option.enable_auto_exposure, 1)
         depth_sensor.set_option(rs.option.exposure, 33000)
         depth_sensor.set_option(rs.option.gain, 16)
-        depth_sensor.set_option(rs.option.laser_power, 150)  # 16 might be out of range; typical range is 0-360
-        depth_sensor.set_option(rs.option.emitter_enabled, 1)  # Laser enabled
-        depth_sensor.set_option(rs.option.enable_auto_white_balance, 0)  # Unchecked
+        depth_sensor.set_option(rs.option.laser_power, 150)  
+        depth_sensor.set_option(rs.option.emitter_enabled, 1) 
+        depth_sensor.set_option(rs.option.enable_auto_white_balance, 0)
 
-        # Depth Units (in meters per unit)
-        depth_sensor.set_option(rs.option.depth_units, 0.001)  # 0.0010000
+        depth_sensor.set_option(rs.option.depth_units, 0.001)
 
-        # Align depth to color
         self.align = rs.align(rs.stream.color)
     
     def setup_filters(self):
-        # Post-Processing Filters from your settings
         self.threshold_filter = rs.threshold_filter()
         self.threshold_filter.set_option(rs.option.min_distance, 0)
         self.threshold_filter.set_option(rs.option.max_distance, 10)
@@ -132,10 +125,69 @@ class RealSenseManager:
         self.temporal_filter.set_option(rs.option.filter_smooth_alpha, 0.4)
         self.temporal_filter.set_option(rs.option.filter_smooth_delta, 20)
 
-        # Color map for visualization (Jet scheme)
         self.colorizer = rs.colorizer()
         self.colorizer.set_option(rs.option.color_scheme, 0)  # 0 = Jet
         self.colorizer.set_option(rs.option.histogram_equalization_enabled, 1)  # Checked
+
+    def dynamic_crop(self, image, width, height):
+        min_distance = 0.740  
+        max_distance = 0.950  
+
+        normalized_distance = 0.55 + (self.distance - min_distance) * (0.65 - 0.55) / (max_distance - min_distance)
+        
+        crop_size_factor = 1 - normalized_distance
+
+        crop_width = int(width * crop_size_factor)
+        crop_height = int(height * crop_size_factor)
+
+        center_x, center_y = width // 2, height // 2
+        x1 = max(0, center_x - crop_width // 2)
+        x2 = min(width, center_x + crop_width // 2)
+        y1 = max(0, center_y - crop_height // 2)
+        y2 = min(height, center_y + crop_height // 2)
+
+        cropped_image = image[y1:y2, x1:x2]
+
+        return cropped_image
+
+    def crop_by_object(self, image, padding=20, draw_contours=True):
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        _, binary = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            
+            x, y, w, h = cv2.boundingRect(largest_contour)
+            
+            x1 = max(0, x - padding)
+            y1 = max(0, y - padding)
+            x2 = min(image.shape[1], x + w + padding)
+            y2 = min(image.shape[0], y + h + padding)
+            
+            image_with_contours = image.copy()
+            
+            if draw_contours:
+                cv2.drawContours(image_with_contours, [largest_contour], -1, (0, 255, 0), 2)
+                cv2.rectangle(image_with_contours, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            
+            cropped_image = image[y1:y2, x1:x2]
+            
+            if draw_contours:
+                cv2.imshow("Image with Contours", image_with_contours)
+                cv2.waitKey(1)
+            
+            return cropped_image
+        else:
+            print("No object detected, using center crop.")
+            width, height = image.shape[1], image.shape[0]
+            crop_size = min(width, height) // 2
+            center_x, center_y = width // 2, height // 2
+            x1 = max(0, center_x - crop_size // 2)
+            x2 = min(width, center_x + crop_size // 2)
+            y1 = max(0, center_y - crop_size // 2)
+            y2 = min(height, center_y + crop_size // 2)
+            return image[y1:y2, x1:x2]
 
     def get_rgb_depth_images(self):
         frames = self.pipeline.wait_for_frames()
@@ -147,17 +199,19 @@ class RealSenseManager:
         depth_frame = aligned_frames.get_depth_frame()
         depth_frame2 = frames.get_depth_frame()
 
-        # Colorize depth for visualization
         colorized_depth = self.colorizer.process(depth_frame)
         depth_image = np.asanyarray(colorized_depth.get_data())
         width, height = depth_frame2.get_width(), depth_frame2.get_height()
         distance = depth_frame2.get_distance(width // 2, height // 2)
         milimeters = distance * 1000    
-        #print(f"Thickness(mm): {milimeters:.2f}")        
-        
-        return rgb_image, depth_image, milimeters
-    
 
+        cropped_rgb_image = self.dynamic_crop(rgb_image, rgb_frame.get_width(), rgb_frame.get_height())
+
+        cv2.imshow("Cropped RGB Image", cropped_rgb_image)  
+        cv2.waitKey(1)  
+
+        return rgb_image, depth_image, milimeters, cropped_rgb_image, distance
+    
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -179,19 +233,29 @@ class MainWindow(QMainWindow):
         self.timerRGB.stop()
 
     def update_images(self):
-        rgb_image, depth_image, _ = self.rs_manager.get_rgb_depth_images()
+        rgb_image, depth_image, _, cropped_rgb_image, _ = self.rs_manager.get_rgb_depth_images()
 
         height, width, _ = rgb_image.shape
         bytesPerLine = 3 * width
+
         qImg = QImage(rgb_image.data, width, height, bytesPerLine, QImage.Format_BGR888)
         qImg = qImg.scaled(IMAGE_SIZE[0], IMAGE_SIZE[1])
         pixmap = QPixmap.fromImage(qImg)
         self.img_label.setPixmap(pixmap)
+
         bytesPerLine = 3 * width
         qImg = QImage(depth_image.data, width, height, bytesPerLine, QImage.Format_RGB888)
         qImg = qImg.scaled(IMAGE_SIZE[0], IMAGE_SIZE[1])
         pixmap = QPixmap.fromImage(qImg)
         self.img_label2.setPixmap(pixmap)
+
+        if cropped_rgb_image is not None:
+            cropped_height, cropped_width, _ = cropped_rgb_image.shape
+            cropped_bytesPerLine = 3 * cropped_width
+            qCroppedImg = QImage(cropped_rgb_image.tobytes(), cropped_width, cropped_height, cropped_bytesPerLine, QImage.Format_BGR888)
+            qCroppedImg = qCroppedImg.scaled(IMAGE_SIZE[0], IMAGE_SIZE[1])
+            cropped_pixmap = QPixmap.fromImage(qCroppedImg)
+            self.img_label3.setPixmap(cropped_pixmap)  
 
     def update_kV(self, data):
         self.kv_value_label.setText(f"{data}")
@@ -206,13 +270,14 @@ class MainWindow(QMainWindow):
         self.mAs_ms_value_label.setText(f"{data:.1f}")
 
     def set_distance(self):
-        _, _, milimeters = self.rs_manager.get_rgb_depth_images()
+        _, _, milimeters, _, distance = self.rs_manager.get_rgb_depth_images()
         self.distance_value_label.setText(f"{milimeters:.0f}")
         self.rs_manager.distance_to_table = milimeters
+        self.rs_manager.distance = distance
     
     def get_thickness(self):
-        _, _, milimeters = self.rs_manager.get_rgb_depth_images()
-        thickness = self.rs_manager.distance_to_table - milimeters
+        _, _, milimeters, _ = self.rs_manager.get_rgb_depth_images()
+        thickness = self.rs_manager.distance - milimeters
         self.thickness_value_label.setText(f"{thickness:.0f}")
     
     def setup_ui(self):
@@ -231,6 +296,11 @@ class MainWindow(QMainWindow):
         self.img_label2.setStyleSheet("background-color: white; border: 1px solid black;")
         self.img_label2.setFixedSize(IMAGE_SIZE[0], IMAGE_SIZE[1])
         h_layout.addWidget(self.img_label2)
+
+        self.img_label3 = QLabel()
+        self.img_label3.setStyleSheet("background-color: white; border: 1px solid black;")
+        self.img_label3.setFixedSize(IMAGE_SIZE[0], IMAGE_SIZE[1])
+        h_layout.addWidget(self.img_label3)
 
         right_widget = QWidget()
         right_widget.setStyleSheet("background-color: #f0f0f0;")
@@ -308,7 +378,6 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(group2_box)
         right_layout.addSpacing(35)
 
-        # Buttons
         self.distance_button = QPushButton("SET DISTANCE")
         self.distance_button.setStyleSheet(f"font-size: {FONT_SIZE}px; padding: 10px;")
         self.distance_button.clicked.connect(self.set_distance)
@@ -321,10 +390,8 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(self.distance_button)
         button_layout.addWidget(self.thicnkness_button)
 
-        # Finalize right layout
         right_layout.addLayout(button_layout)
 
-        # Combine layouts
         h_layout.addWidget(right_widget)
         main_layout.addLayout(h_layout)
         self.resize(1000, 800)
