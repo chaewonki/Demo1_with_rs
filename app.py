@@ -165,17 +165,12 @@ class RealSenseManager:
             x2 = min(image.shape[1], x + w + padding)
             y2 = min(image.shape[0], y + h + padding)
             
-            image_with_contours = image.copy()
-            
             if draw_contours:
+                image_with_contours = image.copy()
                 cv2.drawContours(image_with_contours, [largest_contour], -1, (0, 255, 0), 2)
                 cv2.rectangle(image_with_contours, (x1, y1), (x2, y2), (0, 0, 255), 2)
             
             cropped_image = image[y1:y2, x1:x2]
-            
-            if draw_contours:
-                cv2.imshow("Image with Contours", image_with_contours)
-                cv2.waitKey(1)
             
             return cropped_image
         else:
@@ -222,7 +217,7 @@ class MainWindow(QMainWindow):
 
         self.timerRGB = QTimer()
         self.timerRGB.timeout.connect(self.update_images)
-        self.timerRGB.start()
+        self.timerRGB.start(100)
 
         self.serialComm.kv_signal.connect(self.update_kV)
         self.serialComm.mA_signal.connect(self.update_mA)
@@ -250,9 +245,13 @@ class MainWindow(QMainWindow):
         self.img_label2.setPixmap(pixmap)
 
         if cropped_rgb_image is not None:
-            cropped_height, cropped_width, _ = cropped_rgb_image.shape
-            cropped_bytesPerLine = 3 * cropped_width
-            qCroppedImg = QImage(cropped_rgb_image.tobytes(), cropped_width, cropped_height, cropped_bytesPerLine, QImage.Format_BGR888)
+            cropped_rgb_image = np.ascontiguousarray(cropped_rgb_image)
+            qCroppedImg = QImage(cropped_rgb_image.data,
+                                 cropped_rgb_image.shape[1],
+                                 cropped_rgb_image.shape[0],
+                                 cropped_rgb_image.shape[1] * 3,
+                                 QImage.Format_BGR888
+                                )
             qCroppedImg = qCroppedImg.scaled(IMAGE_SIZE[0], IMAGE_SIZE[1])
             cropped_pixmap = QPixmap.fromImage(qCroppedImg)
             self.img_label3.setPixmap(cropped_pixmap)  
