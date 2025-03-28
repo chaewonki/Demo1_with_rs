@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import serial
 import threading
+import time
 
 STX = b'\x02'
 READY = b'\x00\x00\x01'
@@ -62,19 +63,19 @@ class SerialComm(QWidget):
                 id_bytes = packet[1:4] 
                 data_bytes = packet[4:7]
                 if id_bytes == KV:
-                    kV_value = int.from_bytes(data_bytes)
+                    kV_value = int.from_bytes(data_bytes, byteorder='big')
                     self.kv_signal.emit(kV_value)
                 elif id_bytes == MA:
-                    mA_value = int.from_bytes(data_bytes) / 100
+                    mA_value = int.from_bytes(data_bytes, byteorder='big') / 100
                     self.mA_signal.emit(mA_value)
                 elif id_bytes == MAS:
-                    mAs_ms_value = int.from_bytes(data_bytes) / 100
+                    mAs_ms_value = int.from_bytes(data_bytes, byteorder='big') / 100
                     self.mAs_signal.emit(mAs_ms_value)
                 elif id_bytes == MS:
-                    ms_value = int.from_bytes(data_bytes) / 100
+                    ms_value = int.from_bytes(data_bytes, byteorder='big') / 100
                     self.ms_signal.emit(ms_value)
                 elif id_bytes == APR:
-                    projection_bits = self.extract_direction_bits(data_bytes)
+                    projection_bits = self.extract_direction_bits(data_bytes, byteorder='big')
                     self.projection_signal.emit(projection_bits)
                 elif id_bytes == COL_X:
                     cox_value = int.from_bytes(data_bytes)
@@ -134,7 +135,8 @@ class RealSenseManager:
         max_distance = 0.950  
 
         normalized_distance = 0.55 + (self.distance - min_distance) * (0.65 - 0.55) / (max_distance - min_distance)
-        
+        normalized_distance = np.clip(normalized_distance, 0.1, 1.0)
+
         crop_size_factor = 1 - normalized_distance
 
         crop_width = int(width * crop_size_factor)
@@ -221,6 +223,9 @@ class MainWindow(QMainWindow):
         self.serialComm.mAs_signal.connect(self.update_mAs)
         self.serialComm.ms_signal.connect(self.update_ms)
 
+        self.last_time = time.time()
+        self.fps = 0
+
     def timer_stop(self):
         self.timerRGB.stop()
 
@@ -252,6 +257,13 @@ class MainWindow(QMainWindow):
             qCroppedImg = qCroppedImg.scaled(IMAGE_SIZE[0], IMAGE_SIZE[1])
             cropped_pixmap = QPixmap.fromImage(qCroppedImg)
             self.img_label3.setPixmap(cropped_pixmap)  
+
+        current_time = time.time()
+        delta = current_time - self.last_time
+        if delta > 0:
+            self.fps = 1.0 / delta
+        self.last_time = current_time
+        self.fps_label.setText(f"FPS: {self.fps:.0f}")
 
     def update_kV(self, data):
         self.kv_value_label.setText(f"{data}")
@@ -305,6 +317,10 @@ class MainWindow(QMainWindow):
         title_label = QLabel("SYNICSCRAY DEMO APP")
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet(f"font-size: {FONT_SIZE}px; font-weight: bold;")
+
+        self.fps_label = QLabel("FPS: 0.0")
+        self.fps_label.setAlignment(Qt.AlignCenter)
+        self.fps_label.setStyleSheet(f"font-size: {FONT_SIZE}px; font-weight: bold;")
 
         distance_desc_label = QLabel("Distance(mm):")
         self.distance_value_label = QLabel("VALUE")
@@ -368,11 +384,14 @@ class MainWindow(QMainWindow):
         group2_box.setLayout(group2_layout)
 
         right_layout.addWidget(title_label)
+        right_layout.addSpacing(20)
+        right_layout.addWidget(self.fps_label)
         right_layout.addSpacing(40)
         right_layout.addWidget(group1_box)
         right_layout.addSpacing(30)
         right_layout.addWidget(group2_box)
         right_layout.addSpacing(35)
+        
 
         self.distance_button = QPushButton("SET DISTANCE")
         self.distance_button.setStyleSheet(f"font-size: {FONT_SIZE}px; padding: 10px;")
