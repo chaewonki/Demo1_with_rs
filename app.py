@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
         self.rs_manager.distance = distance
     
     def get_thickness(self):
-        _, _, milimeters, _ = self.rs_manager.get_rgb_depth_images()
+        _, _, milimeters, _, _ = self.rs_manager.get_rgb_depth_images()
         thickness = self.rs_manager.distance - milimeters
         self.thickness_value_label.setText(f"{thickness:.0f}")
     
