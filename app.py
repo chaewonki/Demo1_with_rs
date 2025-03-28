@@ -202,9 +202,6 @@ class RealSenseManager:
 
         cropped_rgb_image = self.dynamic_crop(rgb_image, rgb_frame.get_width(), rgb_frame.get_height())
 
-        cv2.imshow("Cropped RGB Image", cropped_rgb_image)  
-        cv2.waitKey(1)  
-
         return rgb_image, depth_image, milimeters, cropped_rgb_image, distance
     
 class MainWindow(QMainWindow):
