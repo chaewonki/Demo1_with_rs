@@ -7033,7 +7033,7 @@
 				</port>
 			</output>
 		</layer>
-		<layer id="358" name="StatefulPartitionedCall/sequential_1/global_average_pooling2d_1/MeanGather1450718461" type="Const" version="opset1">
+		<layer id="358" name="StatefulPartitionedCall/sequential_1/global_average_pooling2d_1/MeanGather1450718323" type="Const" version="opset1">
 			<data element_type="i64" shape="2" offset="4413632" size="16" />
 			<output>
 				<port id="0" precision="I64">
