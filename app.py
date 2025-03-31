@@ -8,6 +8,7 @@ import numpy as np
 import serial
 import threading
 import time
+from openvino.runtime import Core
 
 STX = b'\x02'
 READY = b'\x00\x00\x01'
@@ -23,6 +24,12 @@ COL_Y = b'COY'
 IMAGE_SIZE = (640, 480)
 
 FONT_SIZE = 30 
+
+class_names = ['LAT', 'PA']
+CLASS_NAMES = {
+    0: "LAT",
+    1: "PA",
+}
 
 class SerialComm(QWidget):
     kv_signal = pyqtSignal(int)
@@ -75,7 +82,7 @@ class SerialComm(QWidget):
                     ms_value = int.from_bytes(data_bytes, byteorder='big') / 100
                     self.ms_signal.emit(ms_value)
                 elif id_bytes == APR:
-                    projection_bits = self.extract_direction_bits(data_bytes, byteorder='big')
+                    projection_bits = self.extract_direction_bits(data_bytes)
                     self.projection_signal.emit(projection_bits)
                 elif id_bytes == COL_X:
                     cox_value = int.from_bytes(data_bytes)
@@ -92,6 +99,7 @@ class RealSenseManager:
     def __init__(self):
         self.init_realsense()
         self.setup_filters()
+        self.load_inference_model()
     
     def init_realsense(self):
         self.pipeline = rs.pipeline()
@@ -129,6 +137,13 @@ class RealSenseManager:
         self.colorizer = rs.colorizer()
         self.colorizer.set_option(rs.option.color_scheme, 0)  # 0 = Jet
         self.colorizer.set_option(rs.option.histogram_equalization_enabled, 1)  # Checked
+
+    def load_inference_model(self):
+        ie = Core()
+        model_path = "./saved_model.xml"
+        model = ie.read_model(model=model_path)
+        self.compiled_model = ie.compile_model(model=model, device_name="CPU")
+        self.output_layer = self.compiled_model.output(0) 
 
     def dynamic_crop(self, image, width, height):
         min_distance = 0.740  
@@ -203,6 +218,19 @@ class RealSenseManager:
         milimeters = distance * 1000    
 
         cropped_rgb_image = self.dynamic_crop(rgb_image, rgb_frame.get_width(), rgb_frame.get_height())
+
+        input_image = cv2.resize(cropped_rgb_image, (224, 224))  
+        input_image = input_image.astype(np.float32) / 255.0 
+        input_image = np.transpose(input_image, (2, 0, 1))  
+        input_image = np.expand_dims(input_image, axis=0)  
+
+        results = self.compiled_model([input_image])[self.output_layer]
+
+        predicted_class = np.argmax(results)
+        confidence = results[0][predicted_class]
+        class_name = CLASS_NAMES.get(predicted_class, "Unknown")
+        label = f"{class_name}: {confidence:.2f}"
+        print(label)
 
         return rgb_image, depth_image, milimeters, cropped_rgb_image, distance
     
@@ -384,7 +412,6 @@ class MainWindow(QMainWindow):
         group2_box.setLayout(group2_layout)
 
         right_layout.addWidget(title_label)
-        right_layout.addSpacing(20)
         right_layout.addWidget(self.fps_label)
         right_layout.addSpacing(40)
         right_layout.addWidget(group1_box)
