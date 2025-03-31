@@ -7,7 +7,6 @@ import cv2
 import numpy as np
 import serial
 import threading
-import time
 from openvino.runtime import Core
 
 STX = b'\x02'
@@ -227,12 +226,12 @@ class RealSenseManager:
         results = self.compiled_model([input_image])[self.output_layer]
 
         predicted_class = np.argmax(results)
-        confidence = results[0][predicted_class]
+        #confidence = results[0][predicted_class]
         class_name = CLASS_NAMES.get(predicted_class, "Unknown")
-        label = f"{class_name}: {confidence:.2f}"
-        print(label)
+        #label = f"{class_name}: {confidence:.2f}"
+        #print(label)
 
-        return rgb_image, depth_image, milimeters, cropped_rgb_image, distance
+        return rgb_image, depth_image, milimeters, cropped_rgb_image, distance, class_name
     
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -251,14 +250,11 @@ class MainWindow(QMainWindow):
         self.serialComm.mAs_signal.connect(self.update_mAs)
         self.serialComm.ms_signal.connect(self.update_ms)
 
-        self.last_time = time.time()
-        self.fps = 0
-
     def timer_stop(self):
         self.timerRGB.stop()
 
     def update_images(self):
-        rgb_image, depth_image, _, cropped_rgb_image, _ = self.rs_manager.get_rgb_depth_images()
+        rgb_image, depth_image, _, cropped_rgb_image, _, class_names = self.rs_manager.get_rgb_depth_images()
 
         height, width, _ = rgb_image.shape
         bytesPerLine = 3 * width
@@ -285,13 +281,9 @@ class MainWindow(QMainWindow):
             qCroppedImg = qCroppedImg.scaled(IMAGE_SIZE[0], IMAGE_SIZE[1])
             cropped_pixmap = QPixmap.fromImage(qCroppedImg)
             self.img_label3.setPixmap(cropped_pixmap)  
-
-        current_time = time.time()
-        delta = current_time - self.last_time
-        if delta > 0:
-            self.fps = 1.0 / delta
-        self.last_time = current_time
-        self.fps_label.setText(f"FPS: {self.fps:.0f}")
+        
+        self.position_value_label.setText(class_names)
+        print(class_names)
 
     def update_kV(self, data):
         self.kv_value_label.setText(f"{data}")
@@ -306,13 +298,13 @@ class MainWindow(QMainWindow):
         self.mAs_ms_value_label.setText(f"{data:.1f}")
 
     def set_distance(self):
-        _, _, milimeters, _, distance = self.rs_manager.get_rgb_depth_images()
+        _, _, milimeters, _, distance, _ = self.rs_manager.get_rgb_depth_images()
         self.distance_value_label.setText(f"{milimeters:.0f}")
         self.rs_manager.distance_to_table = milimeters
         self.rs_manager.distance = distance
     
     def get_thickness(self):
-        _, _, milimeters, _, _ = self.rs_manager.get_rgb_depth_images()
+        _, _, milimeters, _, _, _ = self.rs_manager.get_rgb_depth_images()
         thickness = self.rs_manager.distance * 1000 - milimeters
         self.thickness_value_label.setText(f"{thickness:.0f}")
     
@@ -346,14 +338,12 @@ class MainWindow(QMainWindow):
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet(f"font-size: {FONT_SIZE}px; font-weight: bold;")
 
-        self.fps_label = QLabel("FPS: 0.0")
-        self.fps_label.setAlignment(Qt.AlignCenter)
-        self.fps_label.setStyleSheet(f"font-size: {FONT_SIZE}px; font-weight: bold;")
-
         distance_desc_label = QLabel("Distance(mm):")
         self.distance_value_label = QLabel("VALUE")
         thickness_desc_label = QLabel("Thickness(mm):")
         self.thickness_value_label = QLabel("VALUE")
+        position_desc_label = QLabel("Position:")
+        self.position_value_label = QLabel("VALUE")
 
         kv_desc_label = QLabel("kV:")
         self.kv_value_label = QLabel("00")
@@ -365,6 +355,7 @@ class MainWindow(QMainWindow):
         for label in [title_label, 
                       distance_desc_label, self.distance_value_label, 
                       thickness_desc_label, self.thickness_value_label,
+                      position_desc_label, self.position_value_label,
                       kv_desc_label, self.kv_value_label, 
                       ma_desc_label, self.ma_value_label,
                       mAs_ms_desc_label, self.mAs_ms_value_label]:
@@ -383,9 +374,15 @@ class MainWindow(QMainWindow):
         thickness_layout.addWidget(thickness_desc_label)
         thickness_layout.addWidget(self.thickness_value_label)
 
+        position_layout = QHBoxLayout()
+        position_layout.addWidget(position_desc_label)
+        position_layout.addWidget(self.position_value_label)
+
         group1_layout.addLayout(distance_layout)
         group1_layout.addSpacing(10)
         group1_layout.addLayout(thickness_layout)
+        group1_layout.addSpacing(10)
+        group1_layout.addLayout(position_layout)
         group1_box.setLayout(group1_layout)
 
         group2_box = QGroupBox("Exposure Settings")
@@ -412,7 +409,6 @@ class MainWindow(QMainWindow):
         group2_box.setLayout(group2_layout)
 
         right_layout.addWidget(title_label)
-        right_layout.addWidget(self.fps_label)
         right_layout.addSpacing(40)
         right_layout.addWidget(group1_box)
         right_layout.addSpacing(30)
