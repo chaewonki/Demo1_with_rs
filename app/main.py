@@ -58,7 +58,6 @@ class MainWindow(QMainWindow):
             self.img_label3.setPixmap(cropped_pixmap)  
         
         self.position_value_label.setText(class_names)
-        #print(class_names)
 
     def update_kV(self, data):
         self.kv_value_label.setText(f"{data}")
